@@ -1,7 +1,7 @@
 use std::ffi::CString;
 
 use clap::{arg, value_parser, ArgAction, Command};
-use runpe::Payload;
+use runpe::{Argument, Payload};
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum PayloadType {
@@ -19,6 +19,7 @@ fn cli() -> Command {
                 .required(true)
                 .value_parser(value_parser!(PayloadType)),
         )
+        .arg(arg!(-a --argument <argument> "Argument"))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -29,6 +30,14 @@ fn main() -> anyhow::Result<()> {
     let resume = *matches.get_one::<bool>("resume").unwrap();
     let file = matches.get_one::<String>("file").unwrap().clone();
     let payload_type = matches.get_one::<PayloadType>("type").unwrap().clone();
+    let argument_cloned = matches
+        .get_one::<String>("argument")
+        .map(|x| x.clone().into_bytes());
+
+    let argument = match &argument_cloned {
+        Some(a) => Argument::Bytes(a),
+        None => Argument::None,
+    };
 
     let file_data = std::fs::read(file)?;
 
@@ -38,7 +47,7 @@ fn main() -> anyhow::Result<()> {
         PayloadType::Pe => Payload::Pe(&file_data),
     };
 
-    let result = unsafe { runpe::runpe64(executable.as_ptr(), payload, resume) };
+    let result = unsafe { runpe::runpe(executable.as_ptr(), payload, resume, argument) };
 
     match result {
         Ok(pi) => println!("Success. PID: {:?}", pi.dwProcessId),

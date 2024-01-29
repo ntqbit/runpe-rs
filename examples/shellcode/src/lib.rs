@@ -31,6 +31,7 @@ struct CustomArgument {
     entry_point: u64,
     entry_point_argument: u64,
     argument: u64,
+    argument_length: u64,
 }
 
 #[inline]
@@ -61,13 +62,15 @@ unsafe extern "C" fn _start(arg: *mut CustomArgument) -> *mut () {
     type MessageBoxA = unsafe extern "C" fn(*mut (), *const i8, *const i8, i32) -> i32;
     let messagebox: MessageBoxA = core::mem::transmute(messagebox);
 
+    // Get argument if present.
+    let text = if arg.argument != 0 {
+        arg.argument as *const i8
+    } else {
+        "Hello!\0".as_ptr() as _
+    };
+
     // Show message.
-    messagebox(
-        core::ptr::null_mut(),
-        "Hello!\0".as_ptr() as _,
-        core::ptr::null(),
-        0,
-    );
+    messagebox(core::ptr::null_mut(), text, core::ptr::null(), 0);
 
     // Call original entry point.
     call_original_ep(arg)

