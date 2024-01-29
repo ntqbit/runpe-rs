@@ -169,7 +169,7 @@ fn align_up(n: usize, alignment: usize) -> usize {
 #[repr(align(16))]
 struct ContextWrapper(CONTEXT);
 
-pub unsafe fn runpe64_existing(
+pub unsafe fn runpe_existing(
     process: HANDLE,
     thread: HANDLE,
     payload: Payload,
@@ -271,14 +271,14 @@ pub unsafe fn create_suspended_process(executable: *const i8) -> Result<PROCESS_
     Ok(processinfo)
 }
 
-pub unsafe fn runpe64(
+pub unsafe fn runpe(
     executable: *const i8,
     payload: Payload,
     resume: bool,
 ) -> Result<PROCESS_INFORMATION, RunpeError> {
     let processinfo = create_suspended_process(executable)?;
 
-    match runpe64_existing(processinfo.hProcess, processinfo.hThread, payload) {
+    match runpe_existing(processinfo.hProcess, processinfo.hThread, payload) {
         Ok(_) => {
             if resume {
                 ResumeThread(processinfo.hThread);
