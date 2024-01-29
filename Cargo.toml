@@ -1,0 +1,12 @@
+[package]
+name = "runpe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winapi = { version = "0.3.9", features = [
+    "errhandlingapi",
+    "memoryapi",
+    "processthreadsapi",
+    "winbase",
+] }

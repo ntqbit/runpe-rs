@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.cargo.target": "x86_64-pc-windows-gnu",
+    "rust-analyzer.linkedProjects": [
+        "./examples/shellcode/Cargo.toml"
+    ]
+}
